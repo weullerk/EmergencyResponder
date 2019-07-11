@@ -1,10 +1,13 @@
 package com.alienonwork.emergencyresponder;
 
 import android.Manifest;
+import android.app.Activity;
+import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.provider.Telephony;
 import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
@@ -12,6 +15,7 @@ import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
+import android.telephony.SmsManager;
 import android.telephony.SmsMessage;
 import android.view.View;
 import android.view.ViewGroup;
@@ -27,6 +31,8 @@ public class EmergencyResponderMainActivity extends AppCompatActivity {
     ArrayList<String> requesters = new ArrayList<String>();
 
     private static final int SMS_RECEIVE_PERMISSION_REQUEST = 1;
+
+    public static final String SENT_SMS = "com.alienonwork.emergencyresponder.SMS_SENT";
 
     private RequesterRecyclerViewAdapter mRequesterAdapter = new RequesterRecyclerViewAdapter(requesters);
 
@@ -44,6 +50,18 @@ public class EmergencyResponderMainActivity extends AppCompatActivity {
                         if (message.getMessageBody().toLowerCase().contains(queryString))
                             requestReceived(message.getOriginatingAddress());
                     }
+                }
+            }
+        }
+    };
+
+    private BroadcastReceiver attemptedSendReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent.getAction().equals(SENT_SMS)) {
+                if (getResultCode() != Activity.RESULT_OK) {
+                    String recipient = intent.getStringExtra("recipient");
+                    requestReceived(recipient);
                 }
             }
         }
@@ -73,6 +91,9 @@ public class EmergencyResponderMainActivity extends AppCompatActivity {
         super.onResume();
         IntentFilter filter = new IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION);
         registerReceiver(emergencyResponseRequestReceiver, filter);
+
+        IntentFilter attemptedDeliveryFilter = new IntentFilter(SENT_SMS);
+        registerReceiver(attemptedSendReceiver, attemptedDeliveryFilter);
     }
 
     public void onPause() {
@@ -110,7 +131,30 @@ public class EmergencyResponderMainActivity extends AppCompatActivity {
             sendResponse(to, outString);
     }
 
-    private void sendResponse(String to, String response) {}
+    private void sendResponse(String to, String response) {
+        int send_sms_permission = ActivityCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS);
+        int phone_state_permission = ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE);
+
+        if (send_sms_permission == PackageManager.PERMISSION_GRANTED && phone_state_permission == PackageManager.PERMISSION_GRANTED) {
+            lock.lock();
+            requesters.remove(to);
+            mRequesterAdapter.notifyDataSetChanged();
+            lock.unlock();
+
+            Intent intent = new Intent(SENT_SMS);
+            intent.putExtra("recipient", to);
+            PendingIntent sendPI = PendingIntent.getBroadcast(getApplicationContext(), 0, intent, 0);
+
+            SmsManager sms = SmsManager.getDefault();
+            sms.sendTextMessage(to, null, response, sendPI, null);
+        } else {
+            if (ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.SEND_SMS)) {
+
+            }
+
+            ActivityCompat.requestPermissions(this, new String[] {Manifest.permission.SEND_SMS}, SMS_RECEIVE_PERMISSION_REQUEST);
+        }
+    }
 
     public void requestReceived(String from) {
         if (!requesters.contains(from)) {
